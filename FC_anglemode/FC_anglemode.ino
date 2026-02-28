@@ -4,7 +4,9 @@
 //IMU
 #define MPU_ADDR 0x68 //TO RECHECK BECAUSE I HAVE A MPU 6500
 float prevRateRoll, prevRatePitch, prevRateYaw;
-float RateRoll=RatePitch=RateYaw=0;
+float RateRoll=0;
+float RatePitch=0; 
+float RateYaw=0;
 float RateCalibrationRoll, RateCalibrationPitch, RateCalibrationYaw;
 float AccX, AccY, AccZ;
 float AngleRoll, AnglePitch;
@@ -56,6 +58,11 @@ float PrevItermAngleRoll, PrevItermAnglePitch;
 float PAngleRoll=2; float PAnglePitch=PAngleRoll;
 float IAngleRoll=0; float IAnglePitch=IAngleRoll;
 float DAngleRoll=0; float DAnglePitch=DAngleRoll;
+volatile uint32_t chStart[4];
+volatile uint16_t chWidth[4];
+volatile uint8_t lastPIND;
+
+
 
 //-----------------------------------------------------------FUNCTIONS----------------------------------------------------------------------- 
 
@@ -71,10 +78,10 @@ void kalman_1d(float KalmanState, float KalmanUncertainty, float KalmanInput, fl
   Kalman1DOutput[0]=KalmanState; 
   Kalman1DOutput[1]=KalmanUncertainty;
 }
-void battery_voltage(void) {
-  Voltage=(float)analogRead(15)/62;
-  Current=(float)analogRead(21)*0.089;
-}
+// void battery_voltage(void) {
+//   Voltage=(float)analogRead(15)/62;
+//   Current=(float)analogRead(21)*0.089;
+// }
 // void read_receiver(void){
 //   ChannelNumber = ReceiverInput.available();  
 //   if (ChannelNumber > 0) {
@@ -83,6 +90,36 @@ void battery_voltage(void) {
 //          }
 //   }
 // }
+
+ISR(PCINT2_vect) {
+  uint8_t curr = PIND;
+  uint8_t changed = curr ^ lastPIND;
+  uint32_t now = micros();
+
+  if (changed & (1 << 2)) {
+    if (curr & (1 << 2)) chStart[0] = now;
+    else chWidth[0] = now - chStart[0];
+  }
+
+  if (changed & (1 << 3)) {
+    if (curr & (1 << 3)) chStart[1] = now;
+    else chWidth[1] = now - chStart[1];
+  }
+
+  if (changed & (1 << 4)) {
+    if (curr & (1 << 4)) chStart[2] = now;
+    else chWidth[2] = now - chStart[2];
+  }
+
+  if (changed & (1 << 5)) {
+    if (curr & (1 << 5)) chStart[3] = now;
+    else chWidth[3] = now - chStart[3];
+  }
+
+  lastPIND = curr;
+}
+
+
 void gyro_signals(void) {
 //LOW_PASS FILTER alread in the setup
   // Wire.beginTransmission(MPU_ADDR);
@@ -187,15 +224,26 @@ void setup() {
   Serial.begin(115200);
   Wire.setClock(400000);
   Wire.begin();
-  motor1.attach(3);
-  motor2.attach(5);
-  motor3.attach(6);
-  motor4.attach(9);
-  
+  motor1.attach(9);
+  motor2.attach(10);
+  motor3.attach(11);
+  motor4.attach(8);
+    
+  pinMode(2, INPUT);
+  pinMode(3, INPUT);
+  pinMode(4, INPUT);
+  pinMode(5, INPUT);
+
+  PCICR |= (1 << PCIE2);      // enable PORTD pin-change interrupts
+  PCMSK2 |= (1 << PCINT18);  // D2  (Roll)
+  PCMSK2 |= (1 << PCINT19);  // D3  (Pitch)
+  PCMSK2 |= (1 << PCINT20);  // D4  (Throttle)
+  PCMSK2 |= (1 << PCINT21);  // D5  (Yaw)
+
   // WOULD ADD A BUZZER HERE
   //red
-  pinMode(5, OUTPUT);
-  digitalWrite(5, HIGH);
+  // pinMode(5, OUTPUT);
+  // digitalWrite(5, HIGH);
   //green
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
@@ -246,11 +294,6 @@ void setup() {
 
 
 
-  // analogWriteFrequency(1, 250);
-  // analogWriteFrequency(2, 250);
-  // analogWriteFrequency(3, 250);
-  // analogWriteFrequency(4, 250);
-  // analogWriteResolution(12);
 
   
   // battery_voltage();
@@ -272,8 +315,8 @@ void setup() {
 
   prevTime = micros();
 
-  pinMode(6, OUTPUT);
-  digitalWrite(6, HIGH);
+  // pinMode(6, OUTPUT);
+  // digitalWrite(6, HIGH);
 }
 void loop() {
 
@@ -295,7 +338,16 @@ void loop() {
   KalmanAnglePitch=Kalman1DOutput[0]; KalmanUncertaintyAnglePitch=Kalman1DOutput[1];
 
 //getting the desired angles 
-  // read_receiver();
+  ReceiverValue[0] = chWidth[0]; // Roll
+  ReceiverValue[1] = chWidth[1]; // Pitch
+  ReceiverValue[2] = chWidth[2]; // Throttle
+  ReceiverValue[3] = chWidth[3]; // Yaw
+
+  Serial.println(ReceiverValue[0]);
+  Serial.println(ReceiverValue[1]);
+  Serial.println(ReceiverValue[2]);
+  Serial.println(ReceiverValue[3]);
+
   DesiredAngleRoll=0.10*(ReceiverValue[0]-1500);
   DesiredAnglePitch=0.10*(ReceiverValue[1]-1500);
   InputThrottle=ReceiverValue[2];
@@ -354,11 +406,7 @@ void loop() {
   motor2_output = constrain(motor2_output, 1180, 2000);
   motor3_output = constrain(motor3_output, 1180, 2000);
   motor4_output = constrain(motor4_output, 1180, 2000);
-  // int ThrottleIdle=1180;
-  // if (motor1_output < ThrottleIdle) motor1_output = ThrottleIdle;
-  // if (motor2_output < ThrottleIdle) motor2_output = ThrottleIdle;
-  // if (motor3_output < ThrottleIdle) motor3_output = ThrottleIdle;
-  // if (motor4_output < ThrottleIdle) motor4_output = ThrottleIdle;
+
 
   int ThrottleCutOff=1000;
 
@@ -376,10 +424,7 @@ void loop() {
   motor4.writeMicroseconds(motor4_output);
 
 
-  // analogWrite(1,motor1_output);
-  // analogWrite(2,motor2_output);
-  // analogWrite(3,motor3_output); 
-  // analogWrite(4,motor4_output);
+
   // battery_voltage();
   // CurrentConsumed=Current*1000*0.004/3600+CurrentConsumed;
   // BatteryRemaining=(BatteryAtStart-CurrentConsumed)/BatteryDefault*100;
